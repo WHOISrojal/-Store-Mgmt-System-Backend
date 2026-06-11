@@ -30,12 +30,18 @@ const app = express();
 connectDB();
 
 // Middleware
-app.use(
-  cors({
-    origin: "https://store-management-livid-eight.vercel.app",
-    credentials: true,
-  }),
-);
+// app.use(
+//   cors({
+//     origin: "https://store-management-livid-eight.vercel.app",
+//     credentials: true,
+//   }),
+// );
+
+app.use(cors({
+  origin: [
+    "https://store-management-livid-eight.vercel.app"
+  ]
+}));
 
 app.use(express.json());
 
