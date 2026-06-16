@@ -37,11 +37,21 @@ connectDB();
 //   }),
 // );
 
-app.use(cors({
-  origin: [
-    "https://store-management-livid-eight.vercel.app"
-  ]
-}));
+// app.use(cors({
+//   origin: [
+//     "https://store-management-livid-eight.vercel.app"
+//   ]
+// }));
+
+app.use(
+  cors({
+    origin: [
+      "http://localhost:5173",
+      "https://store-management-livid-eight.vercel.app",
+    ],
+    credentials: true,
+  }),
+);
 
 app.use(express.json());
 
