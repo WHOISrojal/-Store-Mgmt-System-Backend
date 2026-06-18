@@ -59,7 +59,66 @@ router.get("/", async (req, res) => {
       },
     });
 
-    const sales = await Sale.find();
+    const sales = await Sale.find().populate("customer");
+
+    const pendingCheques = sales.filter(
+      (sale) =>
+        sale.paymentType === "CHEQUE" && sale.chequeStatus === "PENDING",
+    );
+
+    const pendingChequeAmount = pendingCheques.reduce(
+      (sum, sale) => sum + sale.totalAmount,
+      0,
+    );
+
+    const clearedChequeAmount = sales
+      .filter(
+        (sale) =>
+          sale.paymentType === "CHEQUE" && sale.chequeStatus === "CLEARED",
+      )
+      .reduce((sum, sale) => sum + sale.totalAmount, 0);
+
+    const bouncedChequeAmount = sales
+      .filter(
+        (sale) =>
+          sale.paymentType === "CHEQUE" && sale.chequeStatus === "BOUNCED",
+      )
+      .reduce((sum, sale) => sum + sale.totalAmount, 0);
+
+    const overdueChequeAmount = pendingCheques
+      .filter((sale) => {
+        if (!sale.chequeDate) return false;
+
+        return new Date(sale.chequeDate) < today;
+      })
+      .reduce((sum, sale) => sum + sale.totalAmount, 0);
+
+    const todayCheques = pendingCheques.filter((sale) => {
+      if (!sale.chequeDate) return false;
+
+      const chequeDate = new Date(sale.chequeDate);
+
+      return chequeDate.toDateString() === today.toDateString();
+    });
+
+    const next7Days = new Date();
+    next7Days.setDate(next7Days.getDate() + 7);
+
+    const upcomingCheques = pendingCheques.filter((sale) => {
+      if (!sale.chequeDate) return false;
+
+      const chequeDate = new Date(sale.chequeDate);
+
+      return chequeDate >= today && chequeDate <= next7Days;
+    });
+
+    const overdueCheques = pendingCheques.filter((sale) => {
+      if (!sale.chequeDate) return false;
+
+      const chequeDate = new Date(sale.chequeDate);
+
+      return chequeDate < today;
+    });
 
     const last7DaysSales = [];
 
@@ -210,6 +269,16 @@ router.get("/", async (req, res) => {
       todayCreditSales,
       todayCustomerPayments,
       todayNetCash,
+
+      pendingChequeAmount,
+      todayCheques,
+      upcomingCheques,
+      overdueCheques,
+
+      pendingChequeAmount,
+      clearedChequeAmount,
+      bouncedChequeAmount,
+      overdueChequeAmount,
     });
   } catch (error) {
     res.status(500).json({

@@ -38,7 +38,8 @@ router.get("/", async (req, res) => {
 // Create Sale (Cart Based)
 router.post("/", async (req, res) => {
   try {
-    const { customer, items, paymentType } = req.body;
+    const { customer, items, paymentType, chequeNumber, bankName, chequeDate } =
+      req.body;
 
     if (!items || items.length === 0) {
       return res.status(400).json({
@@ -107,14 +108,39 @@ router.post("/", async (req, res) => {
 
     const sale = new Sale({
       customer: customerRecord?._id || null,
+
       paymentType: paymentType || "CASH",
+
+      chequeNumber,
+      bankName,
+      chequeDate,
+
       items: saleItems,
       totalAmount,
       profit,
     });
 
     const savedSale = await sale.save();
-    if (paymentType === "CREDIT" && customerRecord) {
+
+    if (paymentType === "CASH" && customerRecord) {
+      await CustomerTransaction.create({
+        customer: customerRecord._id,
+        type: "PURCHASE",
+        amount: totalAmount,
+        note: `Cash Sale INV-${savedSale._id.toString().slice(-6).toUpperCase()}`,
+      });
+
+      await CustomerTransaction.create({
+        customer: customerRecord._id,
+        type: "PAYMENT",
+        amount: totalAmount,
+        note: `Cash Payment INV-${savedSale._id.toString().slice(-6).toUpperCase()}`,
+      });
+    }
+    if (
+      (paymentType === "CREDIT" || paymentType === "CHEQUE") &&
+      customerRecord
+    ) {
       customerRecord.dueAmount += totalAmount;
 
       await customerRecord.save();
@@ -123,7 +149,7 @@ router.post("/", async (req, res) => {
         customer: customerRecord._id,
         type: "PURCHASE",
         amount: totalAmount,
-        note: `Credit Sale #${savedSale._id}`,
+        note: `Credit Sale INV-${savedSale._id.toString().slice(-6).toUpperCase()}`,
       });
     }
     await AuditLog.create({
@@ -151,6 +177,22 @@ router.get("/customer/:customerId", async (req, res) => {
       .sort({ createdAt: -1 });
 
     res.json(sales);
+  } catch (error) {
+    res.status(500).json({
+      message: error.message,
+    });
+  }
+});
+
+router.get("/cheques", async (req, res) => {
+  try {
+    const cheques = await Sale.find({
+      paymentType: "CHEQUE",
+    })
+      .populate("customer")
+      .sort({ chequeDate: 1 });
+
+    res.json(cheques);
   } catch (error) {
     res.status(500).json({
       message: error.message,
@@ -355,6 +397,81 @@ router.delete("/:id", async (req, res) => {
 
     res.json({
       message: "Sale deleted and stock restored",
+    });
+  } catch (error) {
+    res.status(500).json({
+      message: error.message,
+    });
+  }
+});
+
+// Update Cheque Status
+router.put("/:id/cheque-status", async (req, res) => {
+  try {
+    const { status } = req.body;
+
+    if (!["PENDING", "CLEARED", "BOUNCED"].includes(status)) {
+      return res.status(400).json({
+        message: "Invalid cheque status",
+      });
+    }
+
+    const sale = await Sale.findById(req.params.id);
+
+    if (!sale) {
+      return res.status(404).json({
+        message: "Sale not found",
+      });
+    }
+
+    if (sale.paymentType !== "CHEQUE") {
+      return res.status(400).json({
+        message: "This is not a cheque sale",
+      });
+    }
+
+    const oldStatus = sale.chequeStatus;
+
+    if (oldStatus === "CLEARED") {
+      return res.status(400).json({
+        message: "Cheque already cleared",
+      });
+    }
+
+    sale.chequeStatus = status;
+
+    await sale.save();
+
+    if (oldStatus === "PENDING" && status === "CLEARED" && sale.customer) {
+      const customer = await Customer.findById(sale.customer);
+
+      if (customer) {
+        customer.dueAmount -= sale.totalAmount;
+
+        if (customer.dueAmount < 0) {
+          customer.dueAmount = 0;
+        }
+
+        await customer.save();
+      }
+
+      await CustomerTransaction.create({
+        customer: sale.customer,
+        type: "PAYMENT",
+        amount: sale.totalAmount,
+        note: `Cheque Cleared INV-${sale._id.slice(-6).toUpperCase()}`,
+      });
+    }
+
+    await AuditLog.create({
+      user: req.headers["x-user"] || "Unknown",
+      action: "UPDATE CHEQUE STATUS",
+      details: `Sale ${sale._id} -> ${status}`,
+    });
+
+    res.json({
+      message: `Cheque marked as ${status}`,
+      sale,
     });
   } catch (error) {
     res.status(500).json({

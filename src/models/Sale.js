@@ -10,8 +10,29 @@ const saleSchema = new mongoose.Schema(
 
     paymentType: {
       type: String,
-      enum: ["CASH", "CREDIT"],
+      enum: ["CASH", "CREDIT", "CHEQUE"],
       default: "CASH",
+    },
+
+    chequeNumber: {
+      type: String,
+      default: "",
+    },
+
+    bankName: {
+      type: String,
+      default: "",
+    },
+
+    chequeDate: {
+      type: Date,
+      default: null,
+    },
+
+    chequeStatus: {
+      type: String,
+      enum: ["PENDING", "CLEARED", "BOUNCED"],
+      default: "PENDING",
     },
 
     items: [
