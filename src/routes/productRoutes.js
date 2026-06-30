@@ -33,10 +33,26 @@ router.get("/", async (req, res) => {
 
     const totalProducts = await Product.countDocuments();
 
+    const allProducts = await Product.find();
+
+    const lowStockItems = allProducts.filter(
+      (p) => Number(p.stock) <= Number(p.minimumStock)
+    ).length;
+
+    const inventoryValue = allProducts.reduce(
+      (total, product) =>
+        total + Number(product.costPrice) * Number(product.stock),
+      0
+    );
+
     res.json({
       products,
       currentPage: page,
       totalPages: Math.ceil(totalProducts / limit),
+
+      totalProducts,
+      lowStockItems,
+      inventoryValue,
     });
   } catch (error) {
     res.status(500).json({

@@ -19,11 +19,16 @@ router.get("/", async (req, res) => {
 // Add New Customer
 router.post("/", async (req, res) => {
   try {
-    const { name, phone, address } = req.body;
+    const { name, phone, panNumber, address } = req.body;
+
+    if (!panNumber || !/^\d{9}$/.test(panNumber)) {
+      return res.status(400).json({ message: "PAN must be exactly 9 digits" });
+    }
 
     const customer = new Customer({
       name,
       phone,
+      panNumber,
       address,
     });
 

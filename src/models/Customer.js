@@ -12,6 +12,12 @@ const customerSchema = new mongoose.Schema(
       required: true,
     },
 
+    panNumber: {
+      type: String,
+      required: true,
+      match: [/^\d{9}$/, "PAN must be exactly 9 digits"],
+    },
+
     address: {
       type: String,
       default: "",
