@@ -65,6 +65,7 @@ router.post("/payment", async (req, res) => {
       customerId,
       amount,
       note,
+      paymentMethod, // "CASH" | "ONLINE"
     } = req.body;
 
     const customer = await Customer.findById(customerId);
@@ -80,6 +81,7 @@ router.post("/payment", async (req, res) => {
       type: "PAYMENT",
       amount,
       note,
+      paymentMethod: paymentMethod === "ONLINE" ? "ONLINE" : "CASH",
     });
 
     const savedTransaction = await transaction.save();

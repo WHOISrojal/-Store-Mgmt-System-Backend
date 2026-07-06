@@ -174,6 +174,16 @@ router.get("/", async (req, res) => {
 
     const todayNetCash = todayCashSales + todayCustomerPayments - todayExpenses;
 
+    // ── Discount stats ────────────────────────────────
+    const totalDiscountGiven = sales.reduce(
+      (sum, sale) => sum + (sale.discountAmount || 0),
+      0,
+    );
+
+    const todayDiscountGiven = sales
+      .filter((sale) => new Date(sale.createdAt) >= today)
+      .reduce((sum, sale) => sum + (sale.discountAmount || 0), 0);
+
     const productSales = {};
     const productProfits = {};
 
@@ -279,6 +289,9 @@ router.get("/", async (req, res) => {
       clearedChequeAmount,
       bouncedChequeAmount,
       overdueChequeAmount,
+
+      totalDiscountGiven,
+      todayDiscountGiven,
     });
   } catch (error) {
     res.status(500).json({

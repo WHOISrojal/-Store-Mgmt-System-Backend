@@ -2,11 +2,24 @@ const express = require("express");
 const router  = express.Router();
 
 const Sale                = require("../models/Sale");
-const Product             = require("../models/Product");
-const AuditLog            = require("../models/AuditLog");
-const Customer            = require("../models/Customer");
-const CustomerTransaction = require("../models/CustomerTransaction");
-const StockMovement       = require("../models/StockMovement");
+const Product              = require("../models/Product");
+const AuditLog             = require("../models/AuditLog");
+const Customer              = require("../models/Customer");
+const CustomerTransaction   = require("../models/CustomerTransaction");
+const StockMovement         = require("../models/StockMovement");
+
+// ── helper: resolve discount into a Rs. amount, clamped to [0, subtotal] ──
+function resolveDiscount(discountType, discountValue, subtotal) {
+  const type  = discountType === "PERCENT" ? "PERCENT" : "FLAT";
+  let   value = Number(discountValue) || 0;
+  if (value < 0) value = 0;
+
+  let amount = type === "PERCENT" ? (subtotal * value) / 100 : value;
+  if (amount > subtotal) amount = subtotal; // never discount below zero
+  amount = Math.round(amount * 100) / 100;  // 2dp
+
+  return { type, value, amount };
+}
 
 // ── GET /sales  (paginated) ───────────────────────────────
 router.get("/", async (req, res) => {
@@ -140,13 +153,16 @@ router.get("/:id", async (req, res) => {
 // ── POST /sales ──────────────────────────────────────────
 router.post("/", async (req, res) => {
   try {
-    const { customer, items, paymentType, chequeNumber, bankName, chequeDate } = req.body;
+    const {
+      customer, items, paymentType, chequeNumber, bankName, chequeDate,
+      discountType, discountValue, paidAmount, advancePaymentMethod,
+    } = req.body;
 
     if (!items || items.length === 0)
       return res.status(400).json({ message: "Cart is empty" });
 
     let saleItems   = [];
-    let totalAmount = 0;
+    let subtotal    = 0;
     let profit      = 0;
 
     for (const item of items) {
@@ -163,11 +179,18 @@ router.post("/", async (req, res) => {
         sellingPrice: product.sellingPrice, costPrice: product.costPrice, total: itemTotal,
       });
 
-      totalAmount += itemTotal;
-      profit      += itemProfit;
+      subtotal += itemTotal;
+      profit   += itemProfit;
       product.stock -= item.quantity;
       await product.save();
     }
+
+    // ── Discount ──────────────────────────────────────
+    const { type: discType, value: discValue, amount: discountAmount } =
+      resolveDiscount(discountType, discountValue, subtotal);
+
+    const totalAmount = Math.round((subtotal - discountAmount) * 100) / 100;
+    profit             = Math.round((profit - discountAmount) * 100) / 100; // discount eats into profit
 
     let customerRecord = null;
     if (customer) {
@@ -175,11 +198,35 @@ router.post("/", async (req, res) => {
       if (!customerRecord) return res.status(404).json({ message: "Customer not found" });
     }
 
+    // ── Advance payment (CREDIT / CHEQUE only) ─────────
+    // Clamp to [0, totalAmount] so it can never overpay or go negative.
+    // CASH sales are settled in full at the point of sale, so amountPaid stays 0
+    // there — the "paid" amount is implicitly the whole totalAmount, not a partial.
+    let amountPaid = Number(paidAmount) || 0;
+    if (amountPaid < 0) amountPaid = 0;
+    if (amountPaid > totalAmount) amountPaid = totalAmount;
+    if (paymentType !== "CREDIT" && paymentType !== "CHEQUE") amountPaid = 0;
+
+    // Advance payment method (CASH / ONLINE) only makes sense when an
+    // advance is actually being paid. Defaults to CASH if not specified.
+    let advMethod = null;
+    if (amountPaid > 0) {
+      advMethod = advancePaymentMethod === "ONLINE" ? "ONLINE" : "CASH";
+    }
+
     const sale = new Sale({
       customer: customerRecord?._id || null,
       paymentType: paymentType || "CASH",
       chequeNumber, bankName, chequeDate,
-      items: saleItems, totalAmount, profit,
+      items: saleItems,
+      subtotal,
+      discountType: discType,
+      discountValue: discValue,
+      discountAmount,
+      totalAmount,
+      amountPaid,
+      advancePaymentMethod: advMethod,
+      profit,
     });
     const savedSale = await sale.save();
 
@@ -190,11 +237,32 @@ router.post("/", async (req, res) => {
       });
     }
 
+    // ── Customer ledger ────────────────────────────────
+    // CASH: money is settled instantly at point of sale, so it must NEVER
+    // move dueAmount and must NEVER leave a net balance behind in the
+    // customer's transaction history. We still record it (for purchase
+    // history / receipts) but as a PURCHASE immediately offset by a
+    // PAYMENT of the same amount, so the running "balance after" stays
+    // flat. (A CASH sale must not affect dueAmount — only CREDIT/CHEQUE do.)
     if (paymentType === "CASH" && customerRecord) {
-      await CustomerTransaction.create({ customer: customerRecord._id, type: "PURCHASE", amount: totalAmount, note: `CASH Sale INV-${savedSale._id.toString().slice(-6).toUpperCase()}` });
-      await CustomerTransaction.create({ customer: customerRecord._id, type: "PAYMENT",  amount: totalAmount, note: `Cash Payment INV-${savedSale._id.toString().slice(-6).toUpperCase()}` });
+      const invNo = `INV-${savedSale._id.toString().slice(-6).toUpperCase()}`;
+      await CustomerTransaction.create({
+        customer: customerRecord._id,
+        type: "PURCHASE",
+        amount: totalAmount,
+        note: `CASH Sale ${invNo}`,
+      });
+      await CustomerTransaction.create({
+        customer: customerRecord._id,
+        type: "PAYMENT",
+        amount: totalAmount,
+        note: `CASH Sale ${invNo} (paid in full)`,
+      });
     }
 
+    // CREDIT / CHEQUE: real receivables — money is genuinely owed until
+    // a separate payment event happens later (advance payment, due
+    // clearance, or cheque clearing).
     if ((paymentType === "CREDIT" || paymentType === "CHEQUE") && customerRecord) {
       customerRecord.dueAmount += totalAmount;
       await customerRecord.save();
@@ -204,7 +272,7 @@ router.post("/", async (req, res) => {
     await AuditLog.create({
       user: req.headers["x-user"] || "Unknown",
       action: "CREATE SALE",
-      details: `${customerRecord?.name || "Walk-in Customer"} | ${paymentType || "CASH"} | Rs.${totalAmount}`,
+      details: `${customerRecord?.name || "Walk-in Customer"} | ${paymentType || "CASH"} | Rs.${totalAmount}${discountAmount ? ` | Discount: Rs.${discountAmount}` : ""}${amountPaid ? ` | Advance: Rs.${amountPaid} (${advMethod})` : ""}`,
     });
 
     res.status(201).json(savedSale);
@@ -216,7 +284,7 @@ router.post("/", async (req, res) => {
 // ── PUT /sales/:id ───────────────────────────────────────
 router.put("/:id", async (req, res) => {
   try {
-    const { items } = req.body;
+    const { items, discountType, discountValue } = req.body;
     if (!items || items.length === 0)
       return res.status(400).json({ message: "Sale must contain at least one product" });
 
@@ -230,7 +298,7 @@ router.put("/:id", async (req, res) => {
       if (product) { product.stock += oldItem.quantity; await product.save(); }
     }
 
-    let totalAmount = 0, profit = 0;
+    let subtotal = 0, profit = 0;
     const newItems = [];
 
     for (const item of items) {
@@ -242,11 +310,30 @@ router.put("/:id", async (req, res) => {
       const itemTotal  = product.sellingPrice * item.quantity;
       const itemProfit = (product.sellingPrice - product.costPrice) * item.quantity;
       newItems.push({ product: product._id, quantity: item.quantity, sellingPrice: product.sellingPrice, costPrice: product.costPrice, total: itemTotal });
-      totalAmount += itemTotal; profit += itemProfit;
+      subtotal += itemTotal; profit += itemProfit;
       product.stock -= item.quantity; await product.save();
     }
 
-    sale.items = newItems; sale.totalAmount = totalAmount; sale.profit = profit;
+    // Keep existing discount unless a new one is explicitly provided
+    const useDiscountType  = discountType  !== undefined ? discountType  : sale.discountType;
+    const useDiscountValue = discountValue !== undefined ? discountValue : sale.discountValue;
+
+    const { type: discType, value: discValue, amount: discountAmount } =
+      resolveDiscount(useDiscountType, useDiscountValue, subtotal);
+
+    const totalAmount = Math.round((subtotal - discountAmount) * 100) / 100;
+    profit             = Math.round((profit - discountAmount) * 100) / 100;
+
+    sale.items          = newItems;
+    sale.subtotal        = subtotal;
+    sale.discountType    = discType;
+    sale.discountValue   = discValue;
+    sale.discountAmount  = discountAmount;
+    sale.totalAmount     = totalAmount;
+    // If editing dropped the total below what was already paid, clamp it down
+    // so amountPaid never exceeds the new totalAmount.
+    if (sale.amountPaid > totalAmount) sale.amountPaid = totalAmount;
+    sale.profit          = profit;
     await sale.save();
 
     if (sale.paymentType === "CREDIT" && sale.customer) {
@@ -254,6 +341,20 @@ router.put("/:id", async (req, res) => {
       if (customer) { customer.dueAmount = customer.dueAmount - oldTotalAmount + totalAmount; await customer.save(); }
       await CustomerTransaction.findOneAndUpdate(
         { customer: sale.customer, type: "PURCHASE", note: `CREDIT Sale INV-${sale._id.toString().slice(-6).toUpperCase()}` },
+        { amount: totalAmount }
+      );
+    }
+
+    if (sale.paymentType === "CASH" && sale.customer) {
+      // keep both legs of the customer's purchase history in sync with the
+      // edited total, so the PURCHASE/PAYMENT pair still nets to zero due.
+      const invNo = `INV-${sale._id.toString().slice(-6).toUpperCase()}`;
+      await CustomerTransaction.findOneAndUpdate(
+        { customer: sale.customer, type: "PURCHASE", note: `CASH Sale ${invNo}` },
+        { amount: totalAmount }
+      );
+      await CustomerTransaction.findOneAndUpdate(
+        { customer: sale.customer, type: "PAYMENT", note: `CASH Sale ${invNo} (paid in full)` },
         { amount: totalAmount }
       );
     }
@@ -283,6 +384,12 @@ router.delete("/:id", async (req, res) => {
       const customer = await Customer.findById(sale.customer._id);
       if (customer) { customer.dueAmount = Math.max(0, customer.dueAmount - sale.totalAmount); await customer.save(); }
       await CustomerTransaction.deleteOne({ customer: sale.customer._id, type: "PURCHASE", note: `${sale.paymentType} Sale INV-${sale._id.toString().slice(-6).toUpperCase()}` });
+    }
+
+    if (sale.paymentType === "CASH" && sale.customer) {
+      const invNo = `INV-${sale._id.toString().slice(-6).toUpperCase()}`;
+      await CustomerTransaction.deleteOne({ customer: sale.customer._id, type: "PURCHASE", note: `CASH Sale ${invNo}` });
+      await CustomerTransaction.deleteOne({ customer: sale.customer._id, type: "PAYMENT", note: `CASH Sale ${invNo} (paid in full)` });
     }
 
     await Sale.findByIdAndDelete(req.params.id);

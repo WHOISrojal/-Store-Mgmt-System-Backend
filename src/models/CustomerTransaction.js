@@ -19,6 +19,13 @@ const customerTransactionSchema = new mongoose.Schema(
       required: true,
     },
 
+    // Only relevant when type === "PAYMENT". Tracks how the money came in.
+    paymentMethod: {
+      type: String,
+      enum: ["CASH", "ONLINE"],
+      default: "CASH",
+    },
+
     note: {
       type: String,
       default: "",

@@ -1,14 +1,14 @@
 const express = require("express");
 const router  = express.Router();
 
-const Purchase            = require("../models/Purchase");
-const Product             = require("../models/Product");
-const Supplier            = require("../models/Supplier");
-const SupplierTransaction = require("../models/SupplierTransaction");
-const AuditLog            = require("../models/AuditLog");
-const StockMovement       = require("../models/StockMovement");
-const auth                = require("../middleware/auth");
-const admin               = require("../middleware/admin");
+const Purchase             = require("../models/Purchase");
+const Product               = require("../models/Product");
+const Supplier              = require("../models/Supplier");
+const SupplierTransaction   = require("../models/SupplierTransaction");
+const AuditLog              = require("../models/AuditLog");
+const StockMovement         = require("../models/StockMovement");
+const auth                  = require("../middleware/auth");
+const admin                 = require("../middleware/admin");
 
 // GET /purchases?page=1&limit=15&search=&supplier=
 router.get("/", async (req, res) => {
@@ -79,12 +79,43 @@ router.get("/stats", async (req, res) => {
   }
 });
 
-// POST /purchases  (unchanged logic)
+// POST /purchases
+// Accepts: { supplier, newProduct: { name, category, barcode, unit, sellingPrice, minimumStock },
+//            quantity, costPrice, invoiceNumber }
+// Every purchase creates a brand-new product, using the purchase's quantity as
+// its initial stock and costPrice as its cost price.
 router.post("/", auth, admin, async (req, res) => {
   try {
-    const { supplier, product, quantity, costPrice, invoiceNumber } = req.body;
+    const { supplier, newProduct, quantity, costPrice, invoiceNumber } = req.body;
 
-    const purchase = new Purchase({ supplier, product, quantity, costPrice, invoiceNumber });
+    if (!supplier)   return res.status(400).json({ message: "Supplier is required" });
+    if (!newProduct) return res.status(400).json({ message: "Product details are required" });
+    if (!newProduct.name?.trim()) return res.status(400).json({ message: "Product name is required" });
+    if (!newProduct.sellingPrice) return res.status(400).json({ message: "Selling price is required" });
+    if (!quantity || Number(quantity) <= 0)  return res.status(400).json({ message: "A valid quantity is required" });
+    if (!costPrice || Number(costPrice) <= 0) return res.status(400).json({ message: "A valid cost price is required" });
+
+    const createdProduct = await new Product({
+      name: newProduct.name.trim(),
+      category: newProduct.category || "",
+      barcode: newProduct.barcode || "",
+      image: "",
+      costPrice: Number(costPrice),
+      sellingPrice: Number(newProduct.sellingPrice),
+      stock: Number(quantity),
+      minimumStock: Number(newProduct.minimumStock) || 5,
+      unit: newProduct.unit || "pcs",
+    }).save();
+
+    await AuditLog.create({
+      user: "ADMIN",
+      action: "CREATE PRODUCT",
+      details: `${createdProduct.name} | Cost Rs.${createdProduct.costPrice} | Sell Rs.${createdProduct.sellingPrice} (via Purchase)`,
+    });
+
+    const productId = createdProduct._id;
+
+    const purchase = new Purchase({ supplier, product: productId, quantity, costPrice, invoiceNumber });
     const savedPurchase = await purchase.save();
 
     await AuditLog.create({
@@ -105,21 +136,18 @@ router.post("/", auth, admin, async (req, res) => {
       await supplierRecord.save();
     }
 
-    const existingProduct = await Product.findById(product);
-    if (!existingProduct) {
-      return res.status(404).json({ message: "Product not found" });
-    }
-
     await StockMovement.create({
-      product: existingProduct._id,
+      product: productId,
       type: "PURCHASE",
       quantity,
-      note: "Purchase",
+      note: "Initial stock (via Purchase)",
     });
 
-    await Product.findByIdAndUpdate(product, { $inc: { stock: quantity } });
+    // Stock is already set at product creation time (= quantity), so no
+    // additional increment is needed here.
 
-    res.status(201).json(savedPurchase);
+    const populatedPurchase = await savedPurchase.populate("product");
+    res.status(201).json(populatedPurchase);
   } catch (error) {
     res.status(500).json({ message: error.message });
   }

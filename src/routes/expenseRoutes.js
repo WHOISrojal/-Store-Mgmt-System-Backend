@@ -51,7 +51,10 @@ router.get("/", async (req, res) => {
     }
 
     const [expenses, totalCount] = await Promise.all([
-      Expense.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit),
+      // sort by expenseDate (the date the money was actually spent),
+      // not createdAt (when the record was entered into the system) —
+      // this keeps backdated entries in the right place in the list
+      Expense.find(filter).sort({ expenseDate: -1, createdAt: -1 }).skip(skip).limit(limit),
       Expense.countDocuments(filter),
     ]);
 
@@ -69,15 +72,22 @@ router.get("/", async (req, res) => {
 // POST /expenses
 router.post("/", auth, admin, async (req, res) => {
   try {
-    const { title, amount, category, note } = req.body;
+    const { title, amount, category, note, paymentMethod, date } = req.body;
 
-    const expense = new Expense({ title, amount, category, note });
+    // only allow CASH / ONLINE, default to CASH if missing/invalid
+    const method = ["CASH", "ONLINE"].includes(paymentMethod) ? paymentMethod : "CASH";
+
+    // allow backdating; fall back to now if no date was sent or it's invalid
+    let expenseDate = date ? new Date(date) : new Date();
+    if (isNaN(expenseDate.getTime())) expenseDate = new Date();
+
+    const expense = new Expense({ title, amount, category, note, paymentMethod: method, expenseDate });
     const savedExpense = await expense.save();
 
     await AuditLog.create({
       user: "ADMIN",
       action: "CREATE EXPENSE",
-      details: `${title} | ${category} | Rs.${amount}`,
+      details: `${title} | ${category} | Rs.${amount} | ${method}`,
     });
 
     res.status(201).json(savedExpense);

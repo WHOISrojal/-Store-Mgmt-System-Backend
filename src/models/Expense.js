@@ -17,6 +17,13 @@ const expenseSchema = new mongoose.Schema(
       required: true,
     },
 
+    paymentMethod: {
+      // how the expense was paid: CASH or ONLINE
+      type: String,
+      enum: ["CASH", "ONLINE"],
+      default: "CASH",
+    },
+
     note: {
       type: String,
       default: "",
