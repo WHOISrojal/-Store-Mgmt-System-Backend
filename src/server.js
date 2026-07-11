@@ -48,6 +48,7 @@ app.use(
     origin: [
       "http://localhost:5173",
       "https://store-management-livid-eight.vercel.app",
+      "https://merokarobar-lyart.vercel.app/",
     ],
     credentials: true,
   }),

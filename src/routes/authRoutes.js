@@ -3,18 +3,85 @@ const router = express.Router();
 
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
-const auth = require("../middleware/auth");
 
+const auth = require("../middleware/auth");
 const admin = require("../middleware/admin");
 
 const User = require("../models/User");
 
-// Register
+
+// ======================================
+// Check Setup Status
+// ======================================
+router.get("/setup-status", async (req, res) => {
+  try {
+    const userCount = await User.countDocuments();
+
+    res.json({
+      initialized: userCount > 0,
+    });
+  } catch (error) {
+    res.status(500).json({
+      message: error.message,
+    });
+  }
+});
+
+
+// ======================================
+// First Time Setup
+// Creates first ADMIN only if no users exist
+// ======================================
+router.post("/setup", async (req, res) => {
+  try {
+    const userCount = await User.countDocuments();
+
+    if (userCount > 0) {
+      return res.status(400).json({
+        message: "System already initialized",
+      });
+    }
+
+    const { name, username, password } = req.body;
+
+    if (!name || !username || !password) {
+      return res.status(400).json({
+        message: "All fields are required",
+      });
+    }
+
+    const hashedPassword = await bcrypt.hash(password, 10);
+
+    const user = new User({
+      name,
+      username,
+      password: hashedPassword,
+      role: "ADMIN",
+    });
+
+    await user.save();
+
+    res.status(201).json({
+      message: "Administrator created successfully",
+    });
+  } catch (error) {
+    res.status(500).json({
+      message: error.message,
+    });
+  }
+});
+
+
+// ======================================
+// Register User (ADMIN ONLY)
+// ======================================
 router.post("/register", auth, admin, async (req, res) => {
   try {
     const { name, username, password, role } = req.body;
 
-    const existingUser = await User.findOne({ username });
+    const existingUser = await User.findOne({
+      username,
+    });
 
     if (existingUser) {
       return res.status(400).json({
@@ -43,12 +110,17 @@ router.post("/register", auth, admin, async (req, res) => {
   }
 });
 
+
+// ======================================
 // Login
+// ======================================
 router.post("/login", async (req, res) => {
   try {
     const { username, password } = req.body;
 
-    const user = await User.findOne({ username });
+    const user = await User.findOne({
+      username,
+    });
 
     if (!user) {
       return res.status(400).json({
@@ -56,7 +128,10 @@ router.post("/login", async (req, res) => {
       });
     }
 
-    const isMatch = await bcrypt.compare(password, user.password);
+    const isMatch = await bcrypt.compare(
+      password,
+      user.password,
+    );
 
     if (!isMatch) {
       return res.status(400).json({
