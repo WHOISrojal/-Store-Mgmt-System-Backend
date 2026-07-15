@@ -6,12 +6,47 @@ const CustomerTransaction = require("../models/CustomerTransaction");
 const auth  = require("../middleware/auth");
 const admin = require("../middleware/admin");
 
-// Get All Customers
+// Get All Customers — supports search (name / phone / PAN) + pagination
 router.get("/", async (req, res) => {
   try {
-    const customers = await Customer.find();
+    const page  = parseInt(req.query.page)  || 1;
+    const limit = parseInt(req.query.limit) || 15;
+    const search = (req.query.search || "").trim();
 
-    res.json(customers);
+    // Build filter — case-insensitive partial match on name, phone, or panNumber
+    const filter = search
+      ? {
+          $or: [
+            { name:        { $regex: search, $options: "i" } },
+            { phone:       { $regex: search, $options: "i" } },
+            { panNumber:   { $regex: search, $options: "i" } },
+            { companyName: { $regex: search, $options: "i" } },
+          ],
+        }
+      : {};
+
+    const totalCount = await Customer.countDocuments(filter);
+    const totalPages = Math.max(1, Math.ceil(totalCount / limit));
+
+    const customers = await Customer.find(filter)
+      .sort({ createdAt: -1 })
+      .skip((page - 1) * limit)
+      .limit(limit);
+
+    // Aggregate stats — computed over the FULL filtered set, not just the current page,
+    // so the stat cards stay accurate while paginating/searching.
+    const allMatching = await Customer.find(filter).select("dueAmount");
+    const totalDue = allMatching.reduce((sum, c) => sum + (c.dueAmount || 0), 0);
+    const withDue  = allMatching.filter(c => c.dueAmount > 0).length;
+
+    res.json({
+      customers,
+      currentPage: page,
+      totalPages,
+      totalCount,
+      totalDue,
+      withDue,
+    });
   } catch (error) {
     res.status(500).json({
       message: error.message,
@@ -22,7 +57,7 @@ router.get("/", async (req, res) => {
 // Add New Customer
 router.post("/", async (req, res) => {
   try {
-    const { name, phone, panNumber, address } = req.body;
+    const { name, phone, panNumber, address, companyName } = req.body;
 
     if (!panNumber || !/^\d{9}$/.test(panNumber)) {
       return res.status(400).json({ message: "PAN must be exactly 9 digits" });
@@ -33,6 +68,7 @@ router.post("/", async (req, res) => {
       phone,
       panNumber,
       address,
+      companyName,
     });
 
     const savedCustomer = await customer.save();

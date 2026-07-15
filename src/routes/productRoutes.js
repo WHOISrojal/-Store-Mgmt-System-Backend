@@ -25,14 +25,41 @@ router.get("/", async (req, res) => {
   try {
     const page = Number(req.query.page) || 1;
     const limit = 20;
+    const search = (req.query.search || "").trim();
+    const category = (req.query.category || "").trim();
 
-    const products = await Product.find()
+    // Build filter — case-insensitive partial match across name, category, barcode, lotNo, code
+    const filter = {};
+    const clauses = [];
+
+    if (search) {
+      clauses.push({
+        $or: [
+          { name:     { $regex: search, $options: "i" } },
+          { category: { $regex: search, $options: "i" } },
+          { barcode:  { $regex: search, $options: "i" } },
+          { lotNo:    { $regex: search, $options: "i" } },
+          { code:     { $regex: search, $options: "i" } },
+        ],
+      });
+    }
+
+    if (category && category !== "All") {
+      clauses.push({ category });
+    }
+
+    if (clauses.length) {
+      filter.$and = clauses;
+    }
+
+    const products = await Product.find(filter)
       .sort({ createdAt: -1 })
       .skip((page - 1) * limit)
       .limit(limit);
 
-    const totalProducts = await Product.countDocuments();
+    const totalProducts = await Product.countDocuments(filter);
 
+    // Stat cards stay accurate to the full (unfiltered) inventory, not just the search results
     const allProducts = await Product.find();
 
     const lowStockItems = allProducts.filter(
@@ -48,7 +75,7 @@ router.get("/", async (req, res) => {
     res.json({
       products,
       currentPage: page,
-      totalPages: Math.ceil(totalProducts / limit),
+      totalPages: Math.max(1, Math.ceil(totalProducts / limit)),
 
       totalProducts,
       lowStockItems,
@@ -67,6 +94,8 @@ router.post("/", auth, admin, upload.single("image"), async (req, res) => {
       name,
       category,
       barcode,
+      lotNo,
+      code,
       costPrice,
       sellingPrice,
       stock,
@@ -80,6 +109,8 @@ router.post("/", auth, admin, upload.single("image"), async (req, res) => {
       name,
       category,
       barcode,
+      lotNo,
+      code,
       image,
       costPrice,
       sellingPrice,

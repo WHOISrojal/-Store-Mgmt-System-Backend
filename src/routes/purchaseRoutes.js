@@ -80,7 +80,7 @@ router.get("/stats", async (req, res) => {
 });
 
 // POST /purchases
-// Accepts: { supplier, newProduct: { name, category, barcode, unit, sellingPrice, minimumStock },
+// Accepts: { supplier, newProduct: { name, category, barcode, lotNo, code, unit, sellingPrice, minimumStock },
 //            quantity, costPrice, invoiceNumber }
 // Every purchase creates a brand-new product, using the purchase's quantity as
 // its initial stock and costPrice as its cost price.
@@ -99,6 +99,8 @@ router.post("/", auth, admin, async (req, res) => {
       name: newProduct.name.trim(),
       category: newProduct.category || "",
       barcode: newProduct.barcode || "",
+      lotNo: newProduct.lotNo || "",
+      code: newProduct.code || "",
       image: "",
       costPrice: Number(costPrice),
       sellingPrice: Number(newProduct.sellingPrice),

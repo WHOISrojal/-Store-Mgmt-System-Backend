@@ -17,6 +17,16 @@ const productSchema = new mongoose.Schema(
       default: "",
     },
 
+    lotNo: {
+      type: String,
+      default: "",
+    },
+
+    code: {
+      type: String,
+      default: "",
+    },
+
     image: {
       type: String,
       default: "",

@@ -23,6 +23,11 @@ const customerSchema = new mongoose.Schema(
       default: "",
     },
 
+    companyName: {
+      type: String,
+      default: "",
+    },
+
     dueAmount: {
       type: Number,
       default: 0,
