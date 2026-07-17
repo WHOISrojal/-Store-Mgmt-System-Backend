@@ -290,6 +290,23 @@ router.get("/", async (req, res) => {
       bouncedChequeAmount,
       overdueChequeAmount,
 
+      chequeSummary: {
+        pending: pendingChequeAmount,
+        cleared: clearedChequeAmount,
+        bounced: bouncedChequeAmount,
+        overdue: overdueChequeAmount,
+      },
+
+      salesTrend: last7DaysSales.map((day) => ({
+        label: day.label,
+        value: day.sales,
+      })),
+
+      categories: topCategories.map((category) => ({
+        name: category.category,
+        profit: category.profit,
+      })),
+
       totalDiscountGiven,
       todayDiscountGiven,
     });

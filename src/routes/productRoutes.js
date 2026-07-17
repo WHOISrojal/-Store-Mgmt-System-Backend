@@ -10,8 +10,7 @@ const admin = require("../middleware/admin");
 
 router.get("/all", async (req, res) => {
   try {
-    const products = await Product.find()
-      .sort({ name: 1 });
+    const products = await Product.find().sort({ name: 1 });
 
     res.json(products);
   } catch (error) {
@@ -35,11 +34,11 @@ router.get("/", async (req, res) => {
     if (search) {
       clauses.push({
         $or: [
-          { name:     { $regex: search, $options: "i" } },
+          { name: { $regex: search, $options: "i" } },
           { category: { $regex: search, $options: "i" } },
-          { barcode:  { $regex: search, $options: "i" } },
-          { lotNo:    { $regex: search, $options: "i" } },
-          { code:     { $regex: search, $options: "i" } },
+          { barcode: { $regex: search, $options: "i" } },
+          { lotNo: { $regex: search, $options: "i" } },
+          { code: { $regex: search, $options: "i" } },
         ],
       });
     }
@@ -63,13 +62,13 @@ router.get("/", async (req, res) => {
     const allProducts = await Product.find();
 
     const lowStockItems = allProducts.filter(
-      (p) => Number(p.stock) <= Number(p.minimumStock)
+      (p) => Number(p.stock) <= Number(p.minimumStock),
     ).length;
 
     const inventoryValue = allProducts.reduce(
       (total, product) =>
         total + Number(product.costPrice) * Number(product.stock),
-      0
+      0,
     );
 
     res.json({
@@ -128,6 +127,25 @@ router.post("/", auth, admin, upload.single("image"), async (req, res) => {
     });
 
     res.status(201).json(savedProduct);
+  } catch (error) {
+    res.status(500).json({
+      message: error.message,
+    });
+  }
+});
+
+// Get Single Product
+router.get("/:id", async (req, res) => {
+  try {
+    const product = await Product.findById(req.params.id);
+
+    if (!product) {
+      return res.status(404).json({
+        message: "Product not found",
+      });
+    }
+
+    res.json(product);
   } catch (error) {
     res.status(500).json({
       message: error.message,
